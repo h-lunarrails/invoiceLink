@@ -8,10 +8,11 @@ export const btcFromSats = (s: number) => s / 1e8;
 // ---- Invoice payload (amounts in sats) ----
 export interface InvoicePayload {
   amountFiat: number;         // original fiat amount
-  currency: string;           // e.g. USD/EUR/BRL
+  currency: string;           // e.g. USD/EUR/CAD
   description: string;        // optional
   address: string;            // destination BTC address
-  amountSats: number;         // expected sats (with small cushion)
+  amountSats: number;         // expected sats
+  amountUsd: number;          // converted to USD at invoice creation
   iat: number;                // issued at (ms epoch)
   exp: number;                // quote expiry (ms epoch)
   invoiceExpiresAt?: number;  // hard invoice expiry (ms epoch)
@@ -67,7 +68,7 @@ export async function getBtcPrice(vs: string): Promise<number> {
   catch { return await priceFromBitstamp(vs); }
 }
 
-// Cushion and conversion (default +0.99%)
+// Conversion
 export function computeSatsForFiat(fiatAmount: number, _vs: string, price: number): number {
   const btc = fiatAmount / price;
   return sats(Number(btc.toFixed(8)));
@@ -90,10 +91,9 @@ export async function listAddressTxidsBlockchair(address: string, chain: BtcLike
 export async function getTxDetailsBlockchair(
   txid: string,
   address: string,
-  currency: string,
   chain: BtcLike = "bitcoin",
 ): Promise<{ satsToAddress: number; confirmed: boolean; time: number; blockId?: number }> {
-  const url = `${BLOCKCHAIR_API}/${chain}/dashboards/transaction/${txid}?rates=${encodeURIComponent(currency)}`;
+  const url = `${BLOCKCHAIR_API}/${chain}/dashboards/transaction/${txid}`;
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`Blockchair tx dashboard ${res.status}`);
   const json = await res.json();
