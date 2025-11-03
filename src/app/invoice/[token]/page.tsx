@@ -7,13 +7,11 @@ import { Button } from '@/components/ui/button';
 import { APP_NAME } from '@/lib/constants';
 
 type InvoicePageProps = {
-  params: {
-    token: string;
-  };
+  params: Promise<{ token: string }>;
 };
 
 export default async function InvoicePage({ params }: InvoicePageProps) {
-  const { token } = params;
+  const { token } = await params;
   const invoice = verifyAndDecodeToken(token);
 
   if (!invoice) {
@@ -37,12 +35,15 @@ export default async function InvoicePage({ params }: InvoicePageProps) {
     );
   }
 
+  // The quote is expired if the current time is past the expiry time.
+  const isQuoteExpired = Date.now() > invoice.exp;
+
   return (
     <main className="flex min-h-screen flex-col items-center justify-center p-4 bg-background">
        <div className="absolute top-8 left-8 text-2xl font-bold text-foreground">
         <Link href="/">{APP_NAME}</Link>
       </div>
-      <InvoiceDisplay invoice={invoice} token={token} />
+      <InvoiceDisplay invoice={invoice} token={token} isQuoteInitiallyExpired={isQuoteExpired} />
     </main>
   );
 }

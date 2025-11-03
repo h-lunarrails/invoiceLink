@@ -11,6 +11,10 @@ const invoiceSchema = z.object({
   currency: z.string().min(1, { message: 'Currency is required.' }),
   address: z.string().min(26, { message: 'Please enter a valid Bitcoin address.'}),
   description: z.string().max(100, { message: 'Description is too long.' }).optional(),
+  expiresIn: z.preprocess(
+    (val) => (val === '' ? undefined : val),
+    z.coerce.number().int().positive().optional()
+  ),
 });
 
 export async function createInvoice(prevState: any, formData: FormData) {
@@ -19,6 +23,7 @@ export async function createInvoice(prevState: any, formData: FormData) {
     currency: formData.get('currency'),
     address: formData.get('address'),
     description: formData.get('description'),
+    expiresIn: formData.get('expiresIn'),
   });
 
   if (!validatedFields.success) {
@@ -28,13 +33,17 @@ export async function createInvoice(prevState: any, formData: FormData) {
     };
   }
 
-  const { amount, currency, description, address } = validatedFields.data;
+  const { amount, currency, description, address, expiresIn } = validatedFields.data;
 
   try {
     const btcPrice = await getBtcPrice(currency);
     const amountWithCushion = amount * 1.0099;
     const btcAmount = parseFloat((amountWithCushion / btcPrice).toFixed(8));
     const now = Date.now();
+    
+    // Default to 7 days if expiresIn is not provided by the user
+    const finalExpiresInDays = expiresIn ?? 7;
+    const invoiceExpiresAt = now + finalExpiresInDays * 24 * 60 * 60 * 1000;
 
     const payload = {
       amount,
@@ -44,6 +53,7 @@ export async function createInvoice(prevState: any, formData: FormData) {
       btcAmount,
       iat: now,
       exp: now + QUOTE_EXPIRY_MS,
+      invoiceExpiresAt,
     };
 
     const token = createSignedToken(payload);
@@ -57,37 +67,52 @@ export async function createInvoice(prevState: any, formData: FormData) {
 }
 
 export async function refreshQuote(token: string) {
-  const oldPayload = verifyAndDecodeToken(token);
-  if (!oldPayload) {
-    throw new Error('Invalid token for refresh.');
-  }
+    const oldPayload = verifyAndDecodeToken(token, true);
+    if (!oldPayload) {
+        return { error: 'Invalid token for refresh.' };
+    }
 
-  const { amount, currency, description, address } = oldPayload;
+    const { amount, currency, description, address, invoiceExpiresAt } = oldPayload;
 
-  try {
-    const btcPrice = await getBtcPrice(currency);
-    const amountWithCushion = amount * 1.0099;
-    const btcAmount = parseFloat((amountWithCushion / btcPrice).toFixed(8));
-    const now = Date.now();
+    if (invoiceExpiresAt && Date.now() > invoiceExpiresAt) {
+        return { error: 'This invoice has fully expired and cannot be refreshed.' };
+    }
 
-    const newPayload = {
-      amount,
-      currency,
-      description,
-      address,
-      btcAmount,
-      iat: now,
-      exp: now + QUOTE_EXPIRY_MS,
-    };
-    
-    const newToken = createSignedToken(newPayload);
-    revalidatePath(`/invoice/${token}`);
-    redirect(`/invoice/${newToken}`);
+    let btcPrice;
+    try {
+        btcPrice = await getBtcPrice(currency);
+    } catch (error) {
+        console.error('Failed to fetch BTC price during refresh:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Could not fetch latest Bitcoin price.';
+        return { error: errorMessage };
+    }
 
-  } catch (error) {
-    console.error('Failed to refresh quote:', error);
-    throw new Error('Failed to refresh quote. Please try again.');
-  }
+    try {
+        const amountWithCushion = amount * 1.0099;
+        const btcAmount = parseFloat((amountWithCushion / btcPrice).toFixed(8));
+        const now = Date.now();
+
+        const newPayload = {
+            amount,
+            currency,
+            description,
+            address,
+            btcAmount,
+            iat: now,
+            exp: now + QUOTE_EXPIRY_MS,
+            invoiceExpiresAt,
+        };
+        
+        const newToken = createSignedToken(newPayload);
+        
+        // Instead of calling redirect(), we return the URL to the client
+        // so it can perform the redirect. This works better with client-side transitions.
+        return { redirect: `/invoice/${newToken}` };
+
+    } catch (error) {
+        console.error('Failed to create new token during refresh:', error);
+        return { error: 'Failed to refresh quote. An unexpected error occurred.' };
+    }
 }
 
 interface Utxo {
